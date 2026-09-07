@@ -1,0 +1,33 @@
+# macOS metadata
+.DS_Store
+._*
+
+# Python bytecode and tooling caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local environments and agent-managed dependencies
+.venv/
+venv/
+.share-3d-world-agent-run-runtime/
+
+# Local credentials
+.env
+.env.*
+!.env.example
+
+# Captured runs, local submission receipts, and scratch work
+agent-runs/
+.*.submission.json
+/work/
+
+# Generated release packages
+/dist/
+/share-3d-world-agent-run*.zip
+/share-3d-world-agent-run*.skill

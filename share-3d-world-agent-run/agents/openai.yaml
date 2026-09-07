@@ -1,0 +1,3 @@
+interface:
+  display_name: "Share 3D World Agent Run"
+  short_description: "Review and share agent traces and artifacts through HF PRs."
