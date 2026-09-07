@@ -7,3 +7,5 @@ This page is for the dataset maintainer. It is not a contributor prerequisite or
 3. Review incoming PRs and merge accepted contributions using the Hub interface.
 
 No bootstrap helper is needed. Dataset creation and visibility changes are intentionally absent from the contributor script. Do not ask contributors to create their own datasets. Changing the target requires a new contribution review before upload.
+
+The maintained card template is [dataset-card.md](dataset-card.md). Its `**/viewer.parquet` selection excludes raw JSON and native Mesh tables from automatic loading. Initialize a zero-row root `viewer.parquet` with the schema from `scripts/blender_bundle.py` when empty. Contributions add their own viewer rows without editing a shared index. Remove the empty-state sentence after the first accepted Blender example. The separate `mesh.parquet` files are ready for native Mesh support, but the hosted viewer currently rejects that type; change the configuration only after verifying service support.

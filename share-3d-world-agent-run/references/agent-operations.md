@@ -2,7 +2,7 @@
 
 These instructions are for the agent, not terminal steps for the contributor. Resolve the installed skill directory to an absolute path. Run from a writable task workspace. Use the host's Python 3.10+ executable.
 
-`scripts/run.py` dispatches local build/validation without extra packages. For review/upload it reuses an available `huggingface_hub`, or automatically creates `.share-3d-world-agent-run-runtime` in the working directory and installs the client there. Keep that directory out of captures. Never install into system Python. If host permissions block execution or dependency retrieval, retain the bundle and explain the limitation; do not delegate commands to the contributor.
+`scripts/run.py` uses `pyarrow`, Pillow and `huggingface_hub` for native mesh packaging and submission. It reuses available packages or automatically creates `.share-3d-world-agent-run-runtime` in the working directory and installs its dependencies there. Keep that directory out of captures. Never install into system Python. If host permissions block execution or dependency retrieval, retain the bundle and explain the limitation; do not delegate commands to the contributor.
 
 ## Build
 
@@ -11,7 +11,7 @@ Write an input JSON object with `messages` and `steps`, optionally `final_respon
 Agent command (replace placeholders with actual paths; do not show it as a user task):
 
 ```sh
-python /absolute/skill/scripts/run.py build --title "Golden Gate Bridge Weather World" --transcript /absolute/transcript.json --artifact /absolute/deliverable --output /absolute/workspace/agent-runs
+python /absolute/skill/scripts/run.py build --title "Sculpted Ceramic Teapot" --transcript /absolute/transcript.json --artifact /absolute/create.py --artifact /absolute/scene.blend --artifact /absolute/model.glb --artifact /absolute/preview.png --output /absolute/workspace/agent-runs
 ```
 
 Repeat `--artifact` for selected files/directories. Use `--private-terms-file /absolute/private-terms.json` for known names and handles, keeping that file outside the run. Optional flags include `--platform`, `--host`, `--model`, `--task-type`, and `--status`. The output reports the generated run directory. Inspect its redacted copies, including manually reviewing binary/archive artifacts. If you edit a bundle, rebuild to refresh the manifest before review.
@@ -19,7 +19,7 @@ Repeat `--artifact` for selected files/directories. Use `--private-terms-file /a
 ## Review, then upload
 
 ```sh
-python /absolute/skill/scripts/run.py review --run-dir /absolute/workspace/agent-runs/golden-gate-bridge-weather-world
+python /absolute/skill/scripts/run.py review --run-dir /absolute/workspace/agent-runs/sculpted-ceramic-teapot
 ```
 
 This validates the bundle and returns the public target, existing contributor identity, file manifest, counts, redaction details, and `approval_digest`. Present these in plain language with a link to the bundle. Ask for confirmation of these exact contents and target. Save the returned digest in your task context.
@@ -27,7 +27,7 @@ This validates the bundle and returns the public target, existing contributor id
 Only after confirmation:
 
 ```sh
-python /absolute/skill/scripts/run.py upload --run-dir /absolute/workspace/agent-runs/golden-gate-bridge-weather-world --approved-digest DIGEST_FROM_REVIEW
+python /absolute/skill/scripts/run.py upload --run-dir /absolute/workspace/agent-runs/sculpted-ceramic-teapot --approved-digest DIGEST_FROM_REVIEW
 ```
 
 Never treat possessing a digest as user consent. The digest binds the target and bundle bytes; the agent is responsible for obtaining the user's confirmation. The uploader checks it again and returns `pr_url`. Local validation is also available through `validate --run-dir ...`.

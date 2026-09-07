@@ -14,11 +14,11 @@ spec.loader.exec_module(r)
 
 
 class RunnerTests(unittest.TestCase):
-    def test_build_does_not_prepare_dependencies(self):
-        with patch.object(r.sys, "argv", ["run.py", "build"]), patch.object(r.venv, "EnvBuilder") as env, patch.object(r.subprocess, "call", return_value=0) as call:
+    def test_help_does_not_prepare_dependencies(self):
+        with patch.object(r.sys, "argv", ["run.py", "build", "--help"]), patch.object(r.venv, "EnvBuilder") as env, patch.object(r.subprocess, "call", return_value=0) as call:
             self.assertEqual(r.main(), 0)
             env.assert_not_called()
-            self.assertEqual(call.call_args.args[0][-1], "build")
+            self.assertEqual(call.call_args.args[0][-1], "--help")
 
     def test_missing_hub_client_prepared_in_local_venv(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(r.Path, "cwd", return_value=Path(tmp)), patch.object(r.sys, "argv", ["run.py", "review", "--run-dir", "bundle"]), patch.object(r.importlib.util, "find_spec", return_value=None), patch.object(r.venv, "EnvBuilder") as env, patch.object(r.subprocess, "run", side_effect=[types.SimpleNamespace(returncode=1), types.SimpleNamespace(returncode=0)]) as run, patch.object(r.subprocess, "call", return_value=0) as call:

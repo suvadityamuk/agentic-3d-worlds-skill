@@ -25,6 +25,13 @@ class ContributionTests(unittest.TestCase):
         self.config.write_text(json.dumps({"repo_id": "owner/public-traces"}))
         self.addCleanup(patch.stopall)
         patch.object(c, "CONFIG_PATH", self.config).start()
+        # These tests isolate privacy/approval/Hub behavior. Real Blender gates are
+        # covered separately by test_blender_bundle and the local integration fixture.
+        patch.object(c, "validate_blender").start()
+        self.required = self.root / "blender"
+        self.required.mkdir()
+        for name in ["scene.blend", "create.py", "model.glb", "preview.png"]:
+            (self.required/name).write_bytes(b"fixture")
         self.api = Mock()
         self.api.whoami.return_value = {"name": "contributor"}
         self.api.repo_info.return_value = types.SimpleNamespace(private=False)
@@ -45,7 +52,7 @@ class ContributionTests(unittest.TestCase):
 
     def build(self, *extra):
         self.build_count = getattr(self, "build_count", 0) + 1
-        return Path(self.execute("build", "--title", "Demo world take " + str(self.build_count), "--transcript", str(self.transcript), "--artifact", str(self.artifact), "--output", str(self.root / "runs"), *extra)["run_dir"])
+        return Path(self.execute("build", "--title", "Demo world take " + str(self.build_count), "--transcript", str(self.transcript), "--artifact", str(self.artifact), "--output", str(self.root / "runs"), *[v for p in self.required.iterdir() for v in ["--artifact",str(p)]], *extra)["run_dir"])
 
     def reviewed(self):
         run = self.build()

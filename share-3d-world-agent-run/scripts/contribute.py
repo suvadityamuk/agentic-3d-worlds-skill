@@ -16,8 +16,9 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from privacy import clean_text, clean_object, title_slug
+from blender_bundle import validate_blender, write_viewer, validate_viewer
 
-SCHEMA_VERSION = "0.2.0"
+SCHEMA_VERSION = "0.3.0"
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.json"
 
 SECRET_PATTERNS = [
@@ -237,6 +238,8 @@ def build(args: argparse.Namespace) -> int:
         json.dump(metadata, f, indent=2, ensure_ascii=False)
         f.write("\n")
 
+    validate_blender(run_dir, redacted_transcript, private_terms)
+    write_viewer(run_dir)
     private = {"private_terms": private_terms, "files": {
         p.relative_to(run_dir).as_posix(): sha256_file(p) for p in run_dir.rglob("*") if p.is_file()
     }}
@@ -300,7 +303,7 @@ def validate_run(run_dir: Path) -> dict[str, Any]:
             raise ValueError("Identifying data or unredacted credential pattern in trace/metadata; rebuild before review")
     if not isinstance(meta.get("artifacts"), list):
         raise ValueError("Artifact manifest must be an array")
-    expected = {"trace.json", "metadata.json"}
+    expected = {"trace.json", "metadata.json", "viewer.parquet", "mesh.parquet"}
     for artifact in meta["artifacts"]:
         if set(artifact) - {"path", "mime_type", "size_bytes", "role", "privacy_review"}:
             raise ValueError("Unexpected artifact metadata fields")
@@ -335,6 +338,8 @@ def validate_run(run_dir: Path) -> dict[str, Any]:
     if private.get("files"):
         if {rel: sha256_file(run_dir / rel) for rel in actual} != private["files"]:
             raise ValueError("Private integrity check failed; rebuild and review the changed bundle")
+    validate_blender(run_dir, trace, private_terms)
+    validate_viewer(run_dir)
     return meta
 
 
@@ -420,7 +425,7 @@ def upload(args: argparse.Namespace) -> int:
             result = api.upload_folder(
                 folder_path=str(snapshot), path_in_repo=remote_path,
                 repo_id=repo_id, repo_type="dataset", create_pr=True,
-                allow_patterns=["trace.json", "metadata.json", *[a["path"] for a in meta["artifacts"]]],
+                allow_patterns=["trace.json", "metadata.json", "viewer.parquet", "mesh.parquet", *[a["path"] for a in meta["artifacts"]]],
                 commit_message=meta["title"],
             )
         except Exception:
