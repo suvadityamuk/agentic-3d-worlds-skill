@@ -22,7 +22,7 @@ Repeat `--artifact` for selected files/directories. Use `--private-terms-file /a
 python /absolute/skill/scripts/run.py review --run-dir /absolute/workspace/agent-runs/sculpted-ceramic-teapot
 ```
 
-This validates the bundle and returns the public target, existing contributor identity, file manifest, counts, redaction details, and `approval_digest`. Present these in plain language with a link to the bundle. Ask for confirmation of these exact contents and target. Save the returned digest in your task context.
+This validates the bundle and returns the public target, existing contributor identity, file manifest, counts, redaction details, the custom `pr_title` and `pr_description`, and `approval_digest`. Present these in plain language with a link to the bundle. Ask for confirmation of these exact contents and target. Save the returned digest in your task context.
 
 Only after confirmation:
 
@@ -30,7 +30,7 @@ Only after confirmation:
 python /absolute/skill/scripts/run.py upload --run-dir /absolute/workspace/agent-runs/sculpted-ceramic-teapot --approved-digest DIGEST_FROM_REVIEW
 ```
 
-Never treat possessing a digest as user consent. The digest binds the target and bundle bytes; the agent is responsible for obtaining the user's confirmation. The uploader checks it again and returns `pr_url`. Local validation is also available through `validate --run-dir ...`.
+Never treat possessing a digest as user consent. The digest binds the target, bundle bytes and generated PR description; the agent is responsible for obtaining the user's confirmation. The uploader checks it again, passes the reviewed custom text as `commit_description` (with the short title as `commit_message`), and returns `pr_url`. No generic HF CLI upload description is used. Local validation is also available through `validate --run-dir ...`.
 
 Successful submission writes a receipt beside the bundle, not inside it. Repeating an identical successful submission returns the stored PR URL. An uncertain/failed attempt blocks automatic retry: inspect the target's PRs using the Hub interface/API. Reconcile the receipt with a found PR; only after establishing that no PR was created may the agent remove that run's sibling receipt and retry the same approved bundle. If uncertain, keep the bundle and report the pending outcome.
 

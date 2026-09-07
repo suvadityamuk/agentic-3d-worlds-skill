@@ -22,7 +22,7 @@ Or after a task:
 
 > Use Share 3D World Agent Run to capture this completed task and its artifacts.
 
-The agent collects available messages and tool activity, selects the actual deliverables, redacts and validates a local bundle, and shows what will become public. Confirm the prepared contribution. The agent submits it and returns the Hugging Face PR link. If the host cannot expose part of the run, the agent states that limitation.
+The agent collects available messages and tool activity, selects the actual deliverables, redacts and validates a local bundle, and shows what will become public. Confirm the prepared contribution. The agent submits it with a custom description of the task, included artifacts, checks and capture limits, then returns the Hugging Face PR link. If the host cannot expose part of the run, the agent states that limitation.
 
 ## Blender requirement
 

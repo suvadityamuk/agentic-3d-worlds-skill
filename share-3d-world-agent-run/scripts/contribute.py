@@ -343,10 +343,38 @@ def validate_run(run_dir: Path) -> dict[str, Any]:
     return meta
 
 
+def contribution_description(run_dir: Path) -> str:
+    """Describe only the reviewed public bundle, never account/CLI bookkeeping."""
+    meta = json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
+    trace = json.loads((run_dir / "trace.json").read_text(encoding="utf-8"))
+    prompt = " ".join(str(meta["task"].get("prompt") or meta["title"]).split())
+    if len(prompt) > 800:
+        prompt = prompt[:797].rstrip() + "…"
+    lines = [f"Contributes **{meta['title']}**, a Blender/bpy modeling run.",
+             "", f"Task: {prompt}", "",
+             "Includes the bpy creation code, saved Blender scene, self-contained GLB, "
+             "PNG render, observable trace, and viewer tables.", "",
+             f"Capture: {meta['outcome']['status']}; {meta['summary']['message_count']} visible messages, "
+             f"{meta['summary']['step_count']} work steps, and {len(meta['artifacts'])} artifact files.",
+             "", "Checks passed: Blender scene reopening, GLB geometry comparison, "
+             "embedded-resource checks, preview format, viewer-table consistency, and automated privacy checks."]
+    limitations = trace.get("limitations") or []
+    if limitations:
+        lines += ["", "Capture limitations:"]
+        for item in limitations:
+            value = " ".join(str(item).split())
+            lines.append("- " + value)
+    elif meta['outcome']['status'] != 'success':
+        lines += ["", "The capture is not marked complete; consult the trace for available results."]
+    lines += ["", "The GLB is available as a standalone file. The default dataset table uses a PNG preview; "
+              "this contribution does not claim interactive mesh rendering inside dataset rows."]
+    return "\n".join(lines) + "\n"
+
+
 def bundle_digest(run_dir: Path, repo_id: str) -> str:
     files = {p.relative_to(run_dir).as_posix(): sha256_file(p)
              for p in sorted(run_dir.rglob("*")) if p.is_file()}
-    data = json.dumps({"repo_id": repo_id, "files": files}, sort_keys=True).encode()
+    data = json.dumps({"repo_id": repo_id, "files": files, "pr_description": contribution_description(run_dir)}, sort_keys=True).encode()
     return hashlib.sha256(data).hexdigest()
 
 
@@ -378,7 +406,8 @@ def review(args: argparse.Namespace) -> int:
         "contributor": who.get("name"), "run_dir": str(run_dir),
         "approval_digest": bundle_digest(run_dir, repo_id),
         "total_bytes": sum(p.stat().st_size for p in run_dir.rglob("*") if p.is_file()),
-        "metadata": meta}, indent=2))
+        "metadata": meta, "pr_title": meta["title"],
+        "pr_description": contribution_description(run_dir)}, indent=2))
     return 0
 
 
@@ -427,6 +456,7 @@ def upload(args: argparse.Namespace) -> int:
                 repo_id=repo_id, repo_type="dataset", create_pr=True,
                 allow_patterns=["trace.json", "metadata.json", "viewer.parquet", "mesh.parquet", *[a["path"] for a in meta["artifacts"]]],
                 commit_message=meta["title"],
+                commit_description=contribution_description(snapshot),
             )
         except Exception:
             raise RuntimeError("Upload did not return a confirmed PR. Bundle retained; inspect target PRs before retrying to avoid duplicates") from None

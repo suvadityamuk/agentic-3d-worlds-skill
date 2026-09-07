@@ -79,6 +79,8 @@ class ContributionTests(unittest.TestCase):
             self.assertNotEqual(snap, run)
             self.assertEqual(c.bundle_digest(snap, "owner/public-traces"), digest)
             self.assertTrue(kwargs["create_pr"])
+            self.assertEqual(kwargs["commit_description"], c.contribution_description(run))
+            self.assertIn("Task: Build a demo", kwargs["commit_description"])
             self.assertEqual(kwargs["repo_type"], "dataset")
             self.assertEqual(kwargs["path_in_repo"], "runs/" + run.name)
             return types.SimpleNamespace(pr_url="https://huggingface.co/datasets/owner/public-traces/discussions/12")
@@ -89,6 +91,28 @@ class ContributionTests(unittest.TestCase):
         self.api.upload_folder.assert_called_once()
         self.api.create_repo.assert_not_called()
         self.api.upload_file.assert_not_called()
+
+    def test_review_exposes_specific_description_and_limits(self):
+        data = json.loads(self.transcript.read_text())
+        data['limitations'] = ['One original tool result was truncated.']
+        self.transcript.write_text(json.dumps(data))
+        run = self.build('--status', 'partial')
+        review = self.execute('review', '--run-dir', str(run))
+        self.assertEqual(review['pr_title'], 'Demo world take 1')
+        body = review['pr_description']
+        self.assertIn('Task: Build a demo', body)
+        self.assertIn('Capture: partial', body)
+        self.assertIn('One original tool result was truncated.', body)
+        self.assertNotIn('contributor', body)
+        self.assertNotIn('Upload folder', body)
+        self.assertNotIn('hf_', body)
+
+    def test_description_change_invalidates_approval(self):
+        run, digest = self.reviewed()
+        with patch.object(c, 'contribution_description', return_value='Changed description'):
+            with self.assertRaisesRegex(ValueError, 'differs'):
+                self.upload(run, digest)
+        self.api.upload_folder.assert_not_called()
 
     def test_missing_approval_argument(self):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
