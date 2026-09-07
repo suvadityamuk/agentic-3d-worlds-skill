@@ -25,6 +25,8 @@ venv/
 # Captured runs, local submission receipts, and scratch work
 agent-runs/
 .*.submission.json
+.*.integrity.json
+private-terms*.json
 /work/
 
 # Generated release packages

@@ -1,7 +1,5 @@
-# Shared Codex acceptance case
+# Golden Gate Bridge Weather World reference
 
-Canonical source: https://chatgpt.com/s/cx_6a9eb1869d648191827e8526ac5831da
+The reference example captures creation of a Golden Gate Bridge and San Francisco weather world, including detail and geographic-accuracy revisions. The public run is identified only by that title and its descriptive folder name. Source-session URLs and opaque identifiers stay in private local bookkeeping.
 
-Ask an agent with the installed skill to capture this visible shared run and its actual artifacts. The agent reads the exposed transcript, retrieves every available final artifact, records the source, builds/redacts/validates the bundle, and presents it for confirmation. After confirmation, it automatically opens a PR against the dataset in `share-3d-world-agent-run/config.json` and verifies the PR contains `trace.json`, `metadata.json`, and all final artifacts.
-
-The contributor runs no commands and does not create a dataset. If source content or final artifacts cannot be retrieved, report the missing items and mark recovery partial; do not invent replacements or claim this acceptance case passed. Local synthetic tests validate helper behavior, not successful recovery of this original shared run.
+Capture available visible dialogue, observable steps, actual final source and baked geographic data. Clean identifying metadata, preserve useful task and implementation information, validate the executable artifact, and show the cleaned bundle for confirmation before a new PR. Report missing or originally truncated outputs and privacy omissions honestly. Do not substitute invented records or claim complete recovery.

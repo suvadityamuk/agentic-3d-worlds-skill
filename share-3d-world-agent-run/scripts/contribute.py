@@ -11,12 +11,13 @@ import re
 import shutil
 import tempfile
 import sys
-import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = "0.1.0"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from privacy import clean_text, clean_object, title_slug
+
+SCHEMA_VERSION = "0.2.0"
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.json"
 
 SECRET_PATTERNS = [
@@ -29,10 +30,6 @@ SECRET_PATTERNS = [
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     re.compile(r"(?i)(api[_-]?key|token|password|secret)\s*[:=]\s*['\"]?[^\s,'\"}]{12,}"),
 ]
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def sha256_file(path: Path) -> str:
@@ -51,22 +48,27 @@ def redact_text(text: str) -> tuple[str, int]:
     return text, count
 
 
-def redact_obj(obj: Any) -> tuple[Any, int]:
+def redact_obj(obj: Any, *, package_manifest: bool = False, dependency_map: bool = False) -> tuple[Any, int]:
     if isinstance(obj, str):
         return redact_text(obj)
     if isinstance(obj, list):
-        pairs = [redact_obj(value) for value in obj]
+        pairs = [redact_obj(value, package_manifest=package_manifest) for value in obj]
         return [value for value, _ in pairs], sum(count for _, count in pairs)
     if isinstance(obj, dict):
         result, count = {}, 0
         for key, value in obj.items():
-            if re.fullmatch(r"(?i)(?:api[_-]?key|token|access[_-]?token|password|secret|authorization|cookie|set-cookie)", key):
+            if not dependency_map and re.fullmatch(r"(?i)(?:api[_-]?key|token|access[_-]?token|password|secret|authorization|cookie|set-cookie)", key):
                 if value and value != "[REDACTED]":
                     result[key], count = "[REDACTED]", count + 1
                 else:
                     result[key] = value
             else:
-                result[key], n = redact_obj(value)
+                result[key], n = redact_obj(
+                    value, package_manifest=package_manifest,
+                    dependency_map=package_manifest and key in {
+                        "dependencies", "devDependencies", "peerDependencies", "optionalDependencies"
+                    },
+                )
                 count += n
         return result, count
     return obj, 0
@@ -79,12 +81,9 @@ def configured_repo() -> str:
     return repo_id
 
 
-def validate_run_id(run_id: str) -> None:
-    if str(uuid.UUID(run_id)) != run_id:
-        raise ValueError("run_id must be a canonical UUID")
-
-
 def check_artifact_path(path: Path) -> None:
+    if clean_text(path.as_posix())[1] or any(re.fullmatch(r"[0-9a-f]{8,}", part.split(".")[0], re.I) for part in path.parts):
+        raise ValueError("Artifact filenames must be descriptive and free of identifying references")
     blocked = {".git", ".ssh", ".aws", ".cache", ".share-3d-world-agent-run-runtime", "__pycache__", "id_rsa", "id_ed25519", "credentials", ".netrc"}
     for part in path.parts:
         if part.lower() in blocked or part.lower().startswith(".env"):
@@ -93,22 +92,29 @@ def check_artifact_path(path: Path) -> None:
         raise ValueError("Private-key containers cannot be included as artifacts")
 
 
-def redact_artifact(path: Path) -> tuple[int, str]:
+def redact_artifact(path: Path, private_terms=()) -> tuple[int, str]:
     try:
         content = path.read_text(encoding="utf-8")
     except UnicodeError:
         return 0, "manual_review_required"
     if "\x00" in content:
         return 0, "manual_review_required"
-    redacted, count = redact_text(content)
+    count = 0
+    parsed = False
     if path.suffix.lower() == ".json":
         try:
-            obj, extra = redact_obj(json.loads(redacted))
-            if extra:
-                redacted = json.dumps(obj, indent=2, ensure_ascii=False) + "\n"
-                count += extra
+            obj = json.loads(content)
+            parsed = True
+            obj, count = redact_obj(obj, package_manifest=path.name in {"package.json", "package-lock.json", "npm-shrinkwrap.json"})
+            obj, extra = clean_object(obj, private_terms)
+            count += extra
+            redacted = json.dumps(obj, indent=2, ensure_ascii=False) + "\n" if count else content
         except json.JSONDecodeError:
             pass
+    if not parsed:
+        redacted, count = redact_text(content)
+        redacted, extra = clean_text(redacted, private_terms)
+        count += extra
     if count:
         path.write_text(redacted, encoding="utf-8")
     return count, "text_scanned"
@@ -159,22 +165,42 @@ def copy_artifact(src: Path, dst_root: Path) -> list[Path]:
 
 def build(args: argparse.Namespace) -> int:
     transcript = load_transcript(Path(args.transcript))
-    run_id = args.run_id or str(uuid.uuid4())
-    validate_run_id(run_id)
+    title = args.title.strip()
+    slug = title_slug(title)
+    private_terms = json.loads(Path(args.private_terms_file).read_text()) if args.private_terms_file else []
+    if not isinstance(private_terms, list):
+        raise ValueError("Private terms must be a JSON list kept outside the run")
+    if clean_text(title, private_terms)[1]:
+        raise ValueError("Title contains a private term")
     out_base = Path(args.output).expanduser().resolve()
-    run_dir = out_base / run_id
+    run_dir = out_base / slug
     artifact_root = run_dir / "artifacts"
     artifact_root.mkdir(parents=True, exist_ok=False)
-
-    transcript["schema_version"] = SCHEMA_VERSION
-    transcript["run_id"] = run_id
-    redacted_transcript, redaction_count = redact_obj(transcript)
+    # Whitelist the public schema. Keep tool pairing via a sequential step position.
+    calls = {step.get("call_id"): i for i, step in enumerate(transcript["steps"], 1)
+             if step.get("type") == "tool_call" and step.get("call_id")}
+    fields = {"type", "name", "input", "output", "description", "status", "input_omitted",
+              "output_omitted", "contains_truncation_notice", "message_index", "call_step"}
+    steps = []
+    for i, step in enumerate(transcript["steps"], 1):
+        record = {k: v for k, v in step.items() if k in fields}
+        record["index"] = i
+        if step.get("type") == "tool_result" and step.get("call_id") in calls:
+            record["call_step"] = calls[step["call_id"]]
+        steps.append(record)
+    public = {"schema_version": SCHEMA_VERSION, "title": title,
+              "messages": [{"role": m.get("role"), "content": m.get("content", "")} for m in transcript["messages"]],
+              "steps": steps, "final_response": transcript.get("final_response", ""),
+              "limitations": transcript.get("limitations", [])}
+    public, privacy_count = clean_object(public, private_terms)
+    redacted_transcript, redaction_count = redact_obj(public)
+    redaction_count += privacy_count
 
     artifacts_meta = []
     for artifact in args.artifact or []:
         copied = copy_artifact(Path(artifact).expanduser().absolute(), artifact_root)
         for p in copied:
-            count, scan = redact_artifact(p)
+            count, scan = redact_artifact(p, private_terms)
             redaction_count += count
             rel = p.relative_to(run_dir).as_posix()
             mime = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
@@ -182,7 +208,6 @@ def build(args: argparse.Namespace) -> int:
                 "path": rel,
                 "mime_type": mime,
                 "size_bytes": p.stat().st_size,
-                "sha256": sha256_file(p),
                 "role": "final",
                 "privacy_review": scan,
             })
@@ -191,9 +216,8 @@ def build(args: argparse.Namespace) -> int:
     steps = redacted_transcript.get("steps", [])
     metadata = {
         "schema_version": SCHEMA_VERSION,
-        "run_id": run_id,
-        "created_at": now_iso(),
-        "source": {"url": args.source, "platform": args.platform},
+        "title": title,
+        "source": {"platform": args.platform},
         "task": {"prompt": args.prompt or infer_prompt(messages), "task_type": args.task_type},
         "agent": {"host": args.host, "model": args.model},
         "summary": {"message_count": len(messages), "step_count": len(steps)},
@@ -201,7 +225,9 @@ def build(args: argparse.Namespace) -> int:
         "redaction": {"performed": True, "matches_redacted": redaction_count},
         "outcome": {"status": args.status},
     }
+    metadata, privacy_count = clean_object(metadata, private_terms)
     metadata, meta_redactions = redact_obj(metadata)
+    meta_redactions += privacy_count
     metadata["redaction"]["matches_redacted"] += meta_redactions
 
     with (run_dir / "trace.json").open("w", encoding="utf-8") as f:
@@ -211,13 +237,20 @@ def build(args: argparse.Namespace) -> int:
         json.dump(metadata, f, indent=2, ensure_ascii=False)
         f.write("\n")
 
+    private = {"private_terms": private_terms, "files": {
+        p.relative_to(run_dir).as_posix(): sha256_file(p) for p in run_dir.rglob("*") if p.is_file()
+    }}
+    private_manifest_path(run_dir).write_text(json.dumps(private, indent=2) + "\n", encoding="utf-8")
     validate_run(run_dir)
-    print(json.dumps({"run_id": run_id, "run_dir": str(run_dir), "metadata": metadata}, indent=2))
+    print(json.dumps({"title": title, "run_dir": str(run_dir), "metadata": metadata}, indent=2))
     return 0
 
 
+def private_manifest_path(run_dir: Path) -> Path:
+    return run_dir.parent / f".{run_dir.name}.integrity.json"
+
+
 def validate_run(run_dir: Path) -> dict[str, Any]:
-    validate_run_id(run_dir.name)
     if run_dir.is_symlink():
         raise ValueError("Run directory cannot be a symlink")
     paths = list(run_dir.rglob("*"))
@@ -229,8 +262,23 @@ def validate_run(run_dir: Path) -> dict[str, Any]:
     meta = json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
     if trace.get("schema_version") != SCHEMA_VERSION or meta.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("Unsupported schema_version")
-    if trace.get("run_id") != meta.get("run_id") or trace.get("run_id") != run_dir.name:
-        raise ValueError("run_id mismatch")
+    if trace.get("title") != meta.get("title") or title_slug(trace.get("title")) != run_dir.name:
+        raise ValueError("Title and descriptive directory must match")
+    private_path = private_manifest_path(run_dir)
+    private = json.loads(private_path.read_text()) if private_path.exists() else {}
+    private_terms = private.get("private_terms", [])
+    if set(trace) - {"schema_version", "title", "messages", "steps", "final_response", "limitations"}:
+        raise ValueError("Unexpected trace metadata; only the public training schema is allowed")
+    if set(meta) - {"schema_version", "title", "source", "task", "agent", "summary", "artifacts", "redaction", "outcome"}:
+        raise ValueError("Unexpected public metadata")
+    nested_fields = {
+        "source": {"platform"}, "task": {"prompt", "task_type"},
+        "agent": {"host", "model"}, "summary": {"message_count", "step_count"},
+        "redaction": {"performed", "matches_redacted"}, "outcome": {"status"},
+    }
+    for key, allowed in nested_fields.items():
+        if not isinstance(meta.get(key), dict) or set(meta[key]) - allowed:
+            raise ValueError("Unexpected public metadata fields")
     if not isinstance(trace.get("messages"), list) or not isinstance(trace.get("steps"), list):
         raise ValueError("trace messages/steps must be arrays")
     if any(not isinstance(m, dict) or m.get("role") not in {"user", "assistant"} or "content" not in m for m in trace["messages"]):
@@ -243,13 +291,19 @@ def validate_run(run_dir: Path) -> dict[str, Any]:
         raise ValueError("Invalid outcome")
     if meta.get("redaction", {}).get("performed") is not True:
         raise ValueError("Redaction is required")
+    allowed_message = {"role", "content"}
+    allowed_step = {"index", "type", "name", "input", "output", "description", "status", "input_omitted", "output_omitted", "contains_truncation_notice", "message_index", "call_step"}
+    if any(set(m) - allowed_message for m in trace["messages"]) or any(set(step) - allowed_step for step in trace["steps"]):
+        raise ValueError("Unexpected identifying or host metadata in public records")
     for obj in (trace, meta):
-        if redact_obj(obj)[1]:
-            raise ValueError("Unredacted credential pattern in trace/metadata; rebuild before review")
+        if clean_object(obj, private_terms)[1] or redact_obj(obj)[1]:
+            raise ValueError("Identifying data or unredacted credential pattern in trace/metadata; rebuild before review")
     if not isinstance(meta.get("artifacts"), list):
         raise ValueError("Artifact manifest must be an array")
     expected = {"trace.json", "metadata.json"}
     for artifact in meta["artifacts"]:
+        if set(artifact) - {"path", "mime_type", "size_bytes", "role", "privacy_review"}:
+            raise ValueError("Unexpected artifact metadata fields")
         rel = artifact["path"]
         path = Path(rel)
         if path.is_absolute() or ".." in path.parts or len(path.parts) < 2 or path.parts[0] != "artifacts" or path.as_posix() != rel:
@@ -259,25 +313,28 @@ def validate_run(run_dir: Path) -> dict[str, Any]:
             raise ValueError("Duplicate artifact path")
         expected.add(rel)
         p = run_dir / rel
-        if not p.is_file() or p.stat().st_size != artifact["size_bytes"] or sha256_file(p) != artifact["sha256"]:
+        if not p.is_file() or p.stat().st_size != artifact["size_bytes"]:
             raise ValueError("Artifact missing or hash/size mismatch")
         try:
             content = p.read_text(encoding="utf-8")
         except UnicodeError:
             continue
         if "\x00" not in content:
-            if redact_text(content)[1]:
+            if clean_text(content, private_terms)[1] or redact_text(content)[1]:
                 raise ValueError("Unredacted credential pattern in text artifact")
             if p.suffix.lower() == ".json":
                 try:
                     parsed = json.loads(content)
                 except json.JSONDecodeError:
                     continue
-                if redact_obj(parsed)[1]:
+                if clean_object(parsed, private_terms)[1] or redact_obj(parsed, package_manifest=p.name in {"package.json", "package-lock.json", "npm-shrinkwrap.json"})[1]:
                     raise ValueError("Unredacted secret key in JSON artifact")
     actual = {p.relative_to(run_dir).as_posix() for p in paths if p.is_file()}
     if actual != expected:
         raise ValueError("Run contains files outside the validated manifest")
+    if private.get("files"):
+        if {rel: sha256_file(run_dir / rel) for rel in actual} != private["files"]:
+            raise ValueError("Private integrity check failed; rebuild and review the changed bundle")
     return meta
 
 
@@ -322,7 +379,7 @@ def review(args: argparse.Namespace) -> int:
 
 def validate(args: argparse.Namespace) -> int:
     meta = validate_run(Path(args.run_dir).expanduser().resolve())
-    print(json.dumps({"valid": True, "run_id": meta["run_id"]}, indent=2))
+    print(json.dumps({"valid": True, "title": meta["title"]}, indent=2))
     return 0
 
 
@@ -333,7 +390,7 @@ def upload(args: argparse.Namespace) -> int:
     digest = bundle_digest(run_dir, repo_id)
     if args.approved_digest != digest:
         raise ValueError("Bundle or target differs from the approved review; review and confirm again")
-    receipt_path = run_dir.parent / f".{meta['run_id']}.submission.json"
+    receipt_path = run_dir.parent / f".{run_dir.name}.submission.json"
     if receipt_path.exists():
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         if receipt.get("approval_digest") == digest and receipt.get("pr_url"):
@@ -341,7 +398,7 @@ def upload(args: argparse.Namespace) -> int:
             return 0
         raise RuntimeError("An earlier submission may have created a PR. Inspect the target's PRs and reconcile the local receipt before retrying")
     api, who = hub_context(repo_id)
-    remote_path = f"runs/{meta['run_id']}"
+    remote_path = f"runs/{run_dir.name}"
     try:
         exists = api.file_exists(repo_id=repo_id, filename=f"{remote_path}/metadata.json", repo_type="dataset")
     except Exception:
@@ -350,12 +407,12 @@ def upload(args: argparse.Namespace) -> int:
         raise RuntimeError("This run already exists in the dataset; refusing to replace it")
     # Upload a validated snapshot so later edits to the working bundle cannot enter the PR.
     with tempfile.TemporaryDirectory(prefix="share-3d-world-agent-run-upload-") as tmp:
-        snapshot = Path(tmp) / meta["run_id"]
+        snapshot = Path(tmp) / run_dir.name
         shutil.copytree(run_dir, snapshot)
         validate_run(snapshot)
         if bundle_digest(snapshot, repo_id) != digest:
             raise ValueError("Bundle changed during preparation; review and confirm again")
-        receipt = {"repo_id": repo_id, "run_id": meta["run_id"],
+        receipt = {"repo_id": repo_id, "title": meta["title"],
                    "contributor": who.get("name"), "approval_digest": digest, "status": "pending"}
         with receipt_path.open("x", encoding="utf-8") as f:
             json.dump(receipt, f, indent=2)
@@ -364,7 +421,7 @@ def upload(args: argparse.Namespace) -> int:
                 folder_path=str(snapshot), path_in_repo=remote_path,
                 repo_id=repo_id, repo_type="dataset", create_pr=True,
                 allow_patterns=["trace.json", "metadata.json", *[a["path"] for a in meta["artifacts"]]],
-                commit_message=f"Add agent run {meta['run_id']}",
+                commit_message=meta["title"],
             )
         except Exception:
             raise RuntimeError("Upload did not return a confirmed PR. Bundle retained; inspect target PRs before retrying to avoid duplicates") from None
@@ -384,14 +441,14 @@ def parser() -> argparse.ArgumentParser:
     b = sub.add_parser("build", help="Build and validate a run bundle")
     b.add_argument("--transcript", required=True)
     b.add_argument("--artifact", action="append", default=[])
-    b.add_argument("--source")
     b.add_argument("--platform")
     b.add_argument("--prompt")
     b.add_argument("--task-type", default="other")
     b.add_argument("--host")
     b.add_argument("--model")
     b.add_argument("--status", default="success", choices=["success", "partial", "failed"])
-    b.add_argument("--run-id")
+    b.add_argument("--title", required=True)
+    b.add_argument("--private-terms-file", help="Private JSON list of names/account handles; never included in uploads")
     b.add_argument("--output", default="agent-runs")
     b.set_defaults(func=build)
 

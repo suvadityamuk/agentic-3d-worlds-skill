@@ -1,87 +1,18 @@
-# Run bundle schema
+# Public training schema
 
-## Directory
+Schema version `0.2.0` names each run with a short descriptive `title`. The folder is its lowercase hyphenated form, for example `runs/golden-gate-bridge-weather-world/`. Never use random suffixes or opaque identifiers to resolve a collision; choose a more descriptive title and review it.
 
 ```text
-runs/<run_id>/
+runs/golden-gate-bridge-weather-world/
 ├── trace.json
 ├── metadata.json
 └── artifacts/
-    └── <deliverables>
 ```
 
-## trace.json
+`trace.json` contains only `schema_version`, `title`, `messages`, `steps`, `final_response`, and `limitations`. Messages contain `role` (`user` or `assistant`) and `content`. Chronological steps use sequential integer `index` values; a result may use `call_step` to point to its call's position. These positions express ordering, not source-system identity. Steps can contain `type`, `name`, `input`, `output`, `description`, `status`, `message_index`, and explicit omission/truncation notices.
 
-```json
-{
-  "schema_version": "0.1.0",
-  "run_id": "uuid",
-  "messages": [
-    {"role": "user", "content": "..."},
-    {"role": "assistant", "content": "..."}
-  ],
-  "steps": [
-    {
-      "index": 1,
-      "type": "tool_call",
-      "name": "web_search",
-      "input": {},
-      "output": {},
-      "timestamp": null
-    }
-  ],
-  "final_response": "..."
-}
-```
+`metadata.json` contains only `schema_version`, `title`, `source` (platform only), `task` (prompt and task type), `agent` (host and model), `summary` (message/step counts), `artifacts` (relative path, MIME type, byte size, role, privacy review status), `redaction`, and `outcome`. No contributor/account details, timestamps identifying a session, personal paths, run/thread/call IDs, source commits, or integrity digests belong in these records.
 
-Required fields: `schema_version`, `run_id`, `messages`, `steps`.
+The public manifest lists each artifact exactly once under `artifacts/`. Symlinks, credential paths, unlisted files, suspicious filenames, and size mismatches are rejected. Build stores hashes and known private terms in a sibling `.integrity.json` file outside the run; it never uploads that file. Local review and upload use a private digest binding the target and every public byte. Downloaded bundles without the private sidecar can be checked structurally; verify their Git/LFS content hashes against the Hub for transport integrity.
 
-The `steps` objects intentionally allow additional fields. Keep the stable core small so different agents/editors can contribute without bespoke adapters.
-
-Recommended `type` values:
-- `message`
-- `tool_call`
-- `tool_result`
-- `web_search`
-- `web_fetch`
-- `command`
-- `file_read`
-- `file_write`
-- `artifact_created`
-- `error`
-- `other`
-
-## metadata.json
-
-```json
-{
-  "schema_version": "0.1.0",
-  "run_id": "uuid",
-  "created_at": "ISO-8601",
-  "source": {"url": null, "platform": null},
-  "task": {"prompt": "...", "task_type": "other"},
-  "agent": {"host": null, "model": null},
-  "summary": {"message_count": 0, "step_count": 0},
-  "artifacts": [
-    {
-      "path": "artifacts/example.ext",
-      "mime_type": "application/octet-stream",
-      "size_bytes": 0,
-      "sha256": "...",
-      "role": "final"
-    }
-  ],
-  "redaction": {"performed": true, "matches_redacted": 0},
-  "outcome": {"status": "success"}
-}
-```
-
-## Validation and review additions
-
-Run IDs are canonical UUID strings. `messages` contains only visible `user` and `assistant` entries with `content`; exposed tool activity belongs in `steps`. Add a `limitations` field to the trace and use outcome `partial` for missing context or artifacts.
-
-The manifest lists every included artifact exactly once. Paths must remain under `artifacts/`; symlinks, credential paths, unlisted files, size mismatches, and hash mismatches are rejected. SHA-256 and sizes describe the redacted copies, not the original inputs. Summary counts must match the trace.
-
-Each newly built artifact also includes `privacy_review`: `text_scanned` or `manual_review_required`. This records the automated scan's scope, not a guarantee that a file is safe. Agents must inspect binaries/archives and review the contribution before asking for confirmation.
-
-The review's `approval_digest` binds the configured target and every bundle file's bytes. It is passed to upload after user confirmation and is not stored inside the dataset. Upload receipts live beside the local run directory and are also excluded from contributions. The repository ID comes only from the skill's `config.json`.
+Automated privacy checks supplement mandatory semantic review. Preserve useful design requests, geometry, material, lighting, interaction, implementation, error and validation information. Identify omissions honestly. Do not include raw host logs or dumps with unreviewed fields. Document source licenses and public geographic facts in plain language without identifying the contributor or the source session.

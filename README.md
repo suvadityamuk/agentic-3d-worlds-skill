@@ -28,10 +28,12 @@ The agent collects available messages and tool activity, selects the actual deli
 
 [share-3d-world-agent-run/config.json](share-3d-world-agent-run/config.json) is the single source of truth for the target dataset. It defaults to the owner's `suvadityamuk/agentic-3d-worlds`. Contributors use that destination automatically; there are no per-run repository flags or environment-variable overrides.
 
+Each run is named with a short descriptive title. The title also names its PR. Public records exclude contributor details, source-session IDs, personal paths, private links and checksum inventories. Private integrity checks stay on the contributor’s machine.
+
 Each PR contributes only:
 
 ```text
-runs/<run-id>/
+runs/golden-gate-bridge-weather-world/
 ├── trace.json
 ├── metadata.json
 └── artifacts/
@@ -52,3 +54,5 @@ These are separate from contributor installation and use:
 ## License
 
 MIT. The software license does not automatically license contributed artifacts; contributors must have permission to share the selected material publicly.
+
+The cleaned dialogue, observable steps and artifact sources are intended for later curation and training on 3D worlds and interfaces. Missing context and privacy edits are explicitly documented. The skill does not claim to remove the account and Git/PR metadata that Hugging Face itself displays.
