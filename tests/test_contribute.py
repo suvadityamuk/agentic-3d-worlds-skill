@@ -36,6 +36,8 @@ class ContributionTests(unittest.TestCase):
         self.api.whoami.return_value = {"name": "contributor"}
         self.api.repo_info.return_value = types.SimpleNamespace(private=False)
         self.api.file_exists.return_value = False
+        self.api.get_discussion_details.return_value = types.SimpleNamespace(
+            git_reference="refs/pr/12", events=[types.SimpleNamespace(type="comment", id="opening", content="initial")])
         self.api.upload_folder.return_value = types.SimpleNamespace(pr_url="https://huggingface.co/datasets/owner/public-traces/discussions/12")
         patch.dict("sys.modules", {"huggingface_hub": types.SimpleNamespace(HfApi=Mock(return_value=self.api))}).start()
         self.transcript = self.root / "input.json"
@@ -106,6 +108,25 @@ class ContributionTests(unittest.TestCase):
         self.assertNotIn('contributor', body)
         self.assertNotIn('Upload folder', body)
         self.assertNotIn('hf_', body)
+
+    def test_preview_links_target_pr_before_merge(self):
+        run, digest = self.reviewed()
+        result = self.upload(run, digest)
+        commit_body = self.api.upload_folder.call_args.kwargs['commit_description']
+        self.assertIn('/blob/main/runs/' + run.name + '/artifacts/model.glb', commit_body)
+        body = self.api.edit_discussion_comment.call_args.kwargs['new_content']
+        self.assertIn('/blob/refs%2Fpr%2F12/runs/' + run.name + '/artifacts/model.glb', body)
+        self.assertIn('https://github.com/suvadityamuk/agentic-3d-worlds-skill', body)
+        self.assertEqual(result['status'], 'submitted')
+
+    def test_description_failure_retries_without_reupload(self):
+        run, digest = self.reviewed()
+        self.api.edit_discussion_comment.side_effect = TimeoutError()
+        with self.assertRaisesRegex(RuntimeError, 'without uploading again'):
+            self.upload(run, digest)
+        self.api.edit_discussion_comment.side_effect = None
+        self.assertEqual(self.upload(run, digest)['status'], 'submitted')
+        self.api.upload_folder.assert_called_once()
 
     def test_description_change_invalidates_approval(self):
         run, digest = self.reviewed()

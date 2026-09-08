@@ -13,6 +13,7 @@ import tempfile
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from privacy import clean_text, clean_object, title_slug
@@ -343,7 +344,7 @@ def validate_run(run_dir: Path) -> dict[str, Any]:
     return meta
 
 
-def contribution_description(run_dir: Path) -> str:
+def contribution_description(run_dir: Path, revision: str = "main") -> str:
     """Describe only the reviewed public bundle, never account/CLI bookkeeping."""
     meta = json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
     trace = json.loads((run_dir / "trace.json").read_text(encoding="utf-8"))
@@ -368,6 +369,11 @@ def contribution_description(run_dir: Path) -> str:
         lines += ["", "The capture is not marked complete; consult the trace for available results."]
     lines += ["", "The GLB is available as a standalone file. The default dataset table uses a PNG preview; "
               "this contribution does not claim interactive mesh rendering inside dataset rows."]
+    glb_url = (f"https://huggingface.co/datasets/{configured_repo()}/blob/"
+               f"{quote(revision, safe='')}/runs/{run_dir.name}/artifacts/model.glb")
+    label = "View Blender GLB after merge" if revision == "main" else "View Blender GLB in this PR"
+    lines += ["", f"[{label}]({glb_url}) · "
+              "[Share 3D World Agent Run on GitHub](https://github.com/suvadityamuk/agentic-3d-worlds-skill)"]
     return "\n".join(lines) + "\n"
 
 
@@ -417,6 +423,30 @@ def validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def finalize_pr_description(api, run_dir: Path, receipt: dict, receipt_path: Path) -> None:
+    """Resolve the preview against this PR, including before it is merged."""
+    prefix = f"https://huggingface.co/datasets/{configured_repo()}/discussions/"
+    url = receipt['pr_url']
+    if not url.startswith(prefix) or not url[len(prefix):].isdigit():
+        raise RuntimeError("Unexpected PR URL; inspect the submission before updating its description")
+    number = int(url[len(prefix):])
+    try:
+        details = api.get_discussion_details(configured_repo(), number, repo_type="dataset")
+        expected_ref = f"refs/pr/{number}"
+        if details.git_reference != expected_ref:
+            raise ValueError("Unexpected PR reference")
+        description = contribution_description(run_dir, revision=expected_ref)
+        comment = next(event for event in details.events if event.type == "comment")
+        if comment.content != description:
+            api.edit_discussion_comment(configured_repo(), number, comment.id,
+                                        new_content=description, repo_type="dataset")
+    except Exception:
+        raise RuntimeError("Files were submitted, but the PR preview link could not be finalized. "
+                           "Retry this same approved submission to repair the description without uploading again.") from None
+    receipt.update(status="submitted")
+    receipt_path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+
+
 def upload(args: argparse.Namespace) -> int:
     run_dir = Path(args.run_dir).expanduser().absolute()
     meta = validate_run(run_dir)
@@ -428,6 +458,9 @@ def upload(args: argparse.Namespace) -> int:
     if receipt_path.exists():
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         if receipt.get("approval_digest") == digest and receipt.get("pr_url"):
+            if receipt.get("status") == "description_pending":
+                api, _ = hub_context(repo_id)
+                finalize_pr_description(api, run_dir, receipt, receipt_path)
             print(json.dumps(receipt, indent=2))
             return 0
         raise RuntimeError("An earlier submission may have created a PR. Inspect the target's PRs and reconcile the local receipt before retrying")
@@ -463,8 +496,9 @@ def upload(args: argparse.Namespace) -> int:
         pr_url = getattr(result, "pr_url", None)
         if not pr_url:
             raise RuntimeError("Hub returned no PR URL. Inspect target PRs before retrying; do not assume submission failed")
-        receipt.update(status="submitted", pr_url=pr_url)
+        receipt.update(status="description_pending", pr_url=pr_url)
         receipt_path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+        finalize_pr_description(api, snapshot, receipt, receipt_path)
     print(json.dumps(receipt, indent=2))
     return 0
 
